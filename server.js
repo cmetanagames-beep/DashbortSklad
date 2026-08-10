@@ -5,14 +5,16 @@ const crypto = require('crypto');
 const { fork } = require('child_process');
 const pdfParse = require('pdf-parse');
 
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 8787);
 const ROOT = __dirname;
 const PUBLIC_ROOT = path.join(ROOT, 'public');
-const CONFIG_FILE = process.env.AKFIX_CONFIG_FILE || path.join(ROOT, 'config.local.json');
-const DASHBOARD_SNAPSHOT_FILE = process.env.AKFIX_SNAPSHOT_FILE || path.join(ROOT, 'dashboard.snapshot.json');
-const CARRIER_ARCHIVE_FILE = process.env.AKFIX_CARRIER_ARCHIVE_FILE || path.join(ROOT, 'carrier.archive.json');
-const INVOICE_QUANTITY_CACHE_FILE = process.env.AKFIX_INVOICE_CACHE_FILE || path.join(ROOT, 'invoice.quantity-cache.json');
+const DATA_ROOT = process.env.AKFIX_DATA_DIR || ROOT;
+fs.mkdirSync(DATA_ROOT, { recursive:true });
+const CONFIG_FILE = process.env.AKFIX_CONFIG_FILE || path.join(DATA_ROOT, 'config.local.json');
+const DASHBOARD_SNAPSHOT_FILE = process.env.AKFIX_SNAPSHOT_FILE || path.join(DATA_ROOT, 'dashboard.snapshot.json');
+const CARRIER_ARCHIVE_FILE = process.env.AKFIX_CARRIER_ARCHIVE_FILE || path.join(DATA_ROOT, 'carrier.archive.json');
+const INVOICE_QUANTITY_CACHE_FILE = process.env.AKFIX_INVOICE_CACHE_FILE || path.join(DATA_ROOT, 'invoice.quantity-cache.json');
 const BASIC_USER = process.env.AKFIX_BASIC_USER || '';
 const BASIC_PASSWORD = process.env.AKFIX_BASIC_PASSWORD || '';
 const authSessions = new Map();
@@ -60,7 +62,11 @@ function parseCookies(req) {
 }
 
 function configuredAuthUsers() {
-  try { return Array.isArray(loadConfig().authUsers) ? loadConfig().authUsers : []; }
+  try {
+    const configured = Array.isArray(loadConfig().authUsers) ? loadConfig().authUsers : [];
+    if (BASIC_USER && BASIC_PASSWORD) return [{ username:BASIC_USER, role:'employee', plainPassword:BASIC_PASSWORD }, ...configured];
+    return configured;
+  }
   catch (_) { return []; }
 }
 
@@ -102,6 +108,7 @@ function authorizeRequest(req, res) {
 }
 
 function verifyPassword(password, user) {
+  if (user?.plainPassword) return safeEqual(password, user.plainPassword);
   if (!user?.salt || !user?.passwordHash) return false;
   const actual = crypto.scryptSync(String(password), user.salt, 64).toString('hex');
   return safeEqual(actual, user.passwordHash);
@@ -116,7 +123,11 @@ function sanitizeWarehouseDashboardPayload(value) {
 }
 
 function loadConfig() {
-  return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  let config = {};
+  if (fs.existsSync(CONFIG_FILE)) config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  if (process.env.AKFIX_CONFIG_JSON) config = { ...config, ...JSON.parse(process.env.AKFIX_CONFIG_JSON) };
+  if (process.env.BITRIX_WEBHOOK) config.bitrixWebhook = process.env.BITRIX_WEBHOOK;
+  return config;
 }
 
 function saveConfig(next) {
@@ -1573,7 +1584,7 @@ async function fetchBaikalOrdersUncached(period, cacheKey, staleCache) {
 }
 
 function serveFile(req, res) {
-  const requestPath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
+  const requestPath = req.url === '/' ? '/warehouse-dashboard/index.html' : req.url.split('?')[0];
   const resolved = path.resolve(PUBLIC_ROOT, `.${requestPath}`);
   if (!resolved.startsWith(`${path.resolve(PUBLIC_ROOT)}${path.sep}`)) {
     res.writeHead(403); res.end('Forbidden'); return;
@@ -1589,6 +1600,7 @@ function serveFile(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const cleanUrl = req.url.split('?')[0];
+  if (req.method === 'GET' && cleanUrl === '/api/health') return json(res, 200, { ok:true, service:'dashbort-sklad' });
   if (req.method === 'POST' && cleanUrl === '/api/auth/login') {
     try {
       const body = await readBody(req);

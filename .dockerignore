@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+config.local.json
+config.local.js
+.env
+.env.*
+dashboard.snapshot.json
+carrier.archive.json
+invoice.quantity-cache.json
+backups
+work
+*.log
