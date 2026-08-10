@@ -1,0 +1,20 @@
+{
+  "name": "dashbort-sklad",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Дашборд склада AKFIX с данными из Bitrix24",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js",
+    "create-password": "node scripts/create-password.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pdf-parse": "^1.1.1",
+    "readable-stream": "3.6.2"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+config.local.json
+config.local.js
+.env
+.env.*
+!.env.example
+dashboard.snapshot.json
+carrier.archive.json
+invoice.quantity-cache.json
+*.tmp
+*.log
+backups/
+work/
+.DS_Store
+Thumbs.db

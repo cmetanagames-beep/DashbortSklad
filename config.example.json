@@ -1,0 +1,11 @@
+{
+  "bitrixWebhook": "https://YOUR-PORTAL.bitrix24.ru/rest/USER_ID/WEBHOOK_TOKEN/",
+  "authUsers": [
+    {
+      "username": "sklad",
+      "role": "employee",
+      "salt": "PASTE_GENERATED_SALT",
+      "passwordHash": "PASTE_GENERATED_PASSWORD_HASH"
+    }
+  ]
+}
