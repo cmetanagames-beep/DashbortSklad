@@ -876,6 +876,11 @@ function normalizeSheetPerson(value) {
   return String(value || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeSheetOrderKey(value) {
+  const groups = String(value || '').match(/\d+/g) || [];
+  return groups.length ? String(Number(groups.at(-1))) : '';
+}
+
 async function fetchGoogleLogistics(force = false) {
   if (!force && googleLogisticsCache.data && googleLogisticsCache.expiresAt > Date.now()) return googleLogisticsCache.data;
   const response = await fetch(GOOGLE_LOGISTICS_CSV, { signal: AbortSignal.timeout(30000) });
@@ -938,20 +943,29 @@ async function fetchGoogleLogistics(force = false) {
   };
   const monthly = new Map();
   const ensureMonth = key => {
-    if (!monthly.has(key)) monthly.set(key, { month:key, orders:0, totalSum:0, logisticsCost:0, logisticsPercent:0,
+    if (!monthly.has(key)) monthly.set(key, { month:key, orders:0, items:0, itemOrders:0, missingItemOrders:0, totalSum:0, logisticsCost:0, logisticsPercent:0,
       types:{ pickup:{orders:0,sum:0}, ours:{orders:0,sum:0}, transport:{orders:0,sum:0} } });
     return monthly.get(key);
+  };
+  const quantityByOrder = new Map(Object.values(invoiceQuantityCache).filter(item => item && item.accountKey && Number.isFinite(Number(item.quantity)))
+    .map(item => [String(item.accountKey), Number(item.quantity)]));
+  const addQuantity = (target, orderNumber) => {
+    const quantity = quantityByOrder.get(normalizeSheetOrderKey(orderNumber));
+    if (Number.isFinite(quantity)) { target.items += quantity; target.itemOrders += 1; }
+    else target.missingItemOrders += 1;
   };
   for (const item of deliveries) {
     const key = monthKey(item.date); if (!key) continue;
     const target = ensureMonth(key), type = /наш.{0,12}достав/i.test(item.deliveryType) ? target.types.ours : target.types.transport;
     target.orders += 1; target.totalSum += Number(item.orderSum || 0);
     type.orders += 1; type.sum += Number(item.orderSum || 0);
+    addQuantity(target, item.orderNumber);
   }
   for (const item of selfPickups) {
     const key = monthKey(item.date); if (!key) continue;
     const target = ensureMonth(key); target.orders += 1; target.totalSum += Number(item.orderSum || 0);
     target.types.pickup.orders += 1; target.types.pickup.sum += Number(item.orderSum || 0);
+    addQuantity(target, item.orderNumber);
   }
   for (const item of summaries) {
     const key = monthKey(item.date); if (key) ensureMonth(key).logisticsCost += Number(item.logisticsCost || 0);
@@ -1108,8 +1122,16 @@ async function invoiceStatsForItems(webhook, requestedItems) {
       const index = cursor++;
       const itemId = Number(items[index]?.itemId);
       const fileId = Number(items[index]?.fileId);
+      const accountNumber = String(items[index]?.accountNumber || '').trim();
+      const accountKey = normalizeSheetOrderKey(accountNumber);
       if (!Number.isFinite(itemId) || !Number.isFinite(fileId)) { result[index] = { itemId, fileId, error:'Некорректный идентификатор' }; continue; }
-      if (invoiceQuantityCache[fileId]) { result[index] = { itemId, fileId, ...invoiceQuantityCache[fileId] }; continue; }
+      if (invoiceQuantityCache[fileId]) {
+        if (accountKey && invoiceQuantityCache[fileId].accountKey !== accountKey) {
+          invoiceQuantityCache[fileId] = { ...invoiceQuantityCache[fileId], accountNumber, accountKey };
+          writeJsonAtomic(INVOICE_QUANTITY_CACHE_FILE, invoiceQuantityCache);
+        }
+        result[index] = { itemId, fileId, ...invoiceQuantityCache[fileId] }; continue;
+      }
       try {
         const item = await bitrixPhotoItem(webhook, itemId);
         const files = Array.isArray(item[BITRIX_INVOICE_FIELD]) ? item[BITRIX_INVOICE_FIELD] : (item[BITRIX_INVOICE_FIELD] ? [item[BITRIX_INVOICE_FIELD]] : []);
@@ -1117,9 +1139,9 @@ async function invoiceStatsForItems(webhook, requestedItems) {
         if (!file?.urlMachine) throw new Error('Счёт не найден');
         const response = await fetchBitrixPhoto(file.urlMachine);
         const stats = await parseInvoiceQuantity(Buffer.from(await response.arrayBuffer()));
-        invoiceQuantityCache[fileId] = stats;
+        invoiceQuantityCache[fileId] = { ...stats, accountNumber, accountKey };
         writeJsonAtomic(INVOICE_QUANTITY_CACHE_FILE, invoiceQuantityCache);
-        result[index] = { itemId, fileId, ...stats };
+        result[index] = { itemId, fileId, ...invoiceQuantityCache[fileId] };
       } catch (error) { result[index] = { itemId, fileId, error:error.message }; }
     }
   };
