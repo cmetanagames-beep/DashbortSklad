@@ -882,6 +882,7 @@ async function fetchGoogleLogistics(force = false) {
   if (!response.ok) throw new Error(`Google Таблица вернула HTTP ${response.status}`);
   const rows = parseCsv(await response.text());
   const deliveries = [];
+  const selfPickups = [];
   const summaries = [];
   let inheritedClient = '';
   for (const cells of rows.slice(3)) {
@@ -899,6 +900,16 @@ async function fetchGoogleLogistics(force = false) {
         warehouse: String(cells[6] || '').trim(), documents: String(cells[7] || '').trim(),
         rework: String(cells[8] || '').trim(), status: String(cells[10] || '').trim(), driver, deliveryType,
         carrierCost: parseSheetMoney(cells[13]), orderSum: parseSheetMoney(cells[14]), logisticsCost: 0,
+      });
+    }
+    const pickupOrderNumber = String(cells[18] || '').trim();
+    const pickupClient = String(cells[17] || '').trim();
+    if (/^\d+$/.test(pickupOrderNumber) && date) {
+      selfPickups.push({
+        date, client: pickupClient, orderNumber: pickupOrderNumber,
+        requestNumber: String(cells[19] || '').trim(), status: String(cells[21] || '').trim(),
+        assembledWarehouse: String(cells[22] || '').trim(), shippedWarehouse: String(cells[23] || '').trim(),
+        orderSum: parseSheetMoney(cells[24]), deliveryType: 'Самовывоз',
       });
     }
     const summaryDriver = String(cells[26] || '').trim();
@@ -921,7 +932,34 @@ async function fetchGoogleLogistics(force = false) {
       allocated += amount;
     });
   }
-  const data = { ok: true, spreadsheetId: '18H4xoO7DFMsIml68G-Ama_fxjc3EW8-tbcKBCtAuuC4', count: deliveries.length, deliveries, summaries: summaries.length };
+  const monthKey = value => {
+    const match = String(value || '').match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    return match ? `${match[3]}-${match[2].padStart(2, '0')}` : '';
+  };
+  const monthly = new Map();
+  const ensureMonth = key => {
+    if (!monthly.has(key)) monthly.set(key, { month:key, orders:0, totalSum:0, logisticsCost:0, logisticsPercent:0,
+      types:{ pickup:{orders:0,sum:0}, ours:{orders:0,sum:0}, transport:{orders:0,sum:0} } });
+    return monthly.get(key);
+  };
+  for (const item of deliveries) {
+    const key = monthKey(item.date); if (!key) continue;
+    const target = ensureMonth(key), type = /наш.{0,12}достав/i.test(item.deliveryType) ? target.types.ours : target.types.transport;
+    target.orders += 1; target.totalSum += Number(item.orderSum || 0);
+    type.orders += 1; type.sum += Number(item.orderSum || 0);
+  }
+  for (const item of selfPickups) {
+    const key = monthKey(item.date); if (!key) continue;
+    const target = ensureMonth(key); target.orders += 1; target.totalSum += Number(item.orderSum || 0);
+    target.types.pickup.orders += 1; target.types.pickup.sum += Number(item.orderSum || 0);
+  }
+  for (const item of summaries) {
+    const key = monthKey(item.date); if (key) ensureMonth(key).logisticsCost += Number(item.logisticsCost || 0);
+  }
+  for (const item of monthly.values()) item.logisticsPercent = item.totalSum > 0 ? item.logisticsCost / item.totalSum * 100 : 0;
+  const monthlyStats = [...monthly.values()].sort((a,b) => b.month.localeCompare(a.month));
+  const data = { ok: true, spreadsheetId: '18H4xoO7DFMsIml68G-Ama_fxjc3EW8-tbcKBCtAuuC4', sheetName:'Отгрузки',
+    count: deliveries.length + selfPickups.length, deliveries, selfPickups, summaries: summaries.length, monthlyStats };
   // Таблица «Отгрузка» является источником суммы заказа, водителя и затрат
   // первой мили. Держим снимок на сервере десять минут, чтобы браузеры
   // сотрудников никогда не обращались к Google напрямую.
