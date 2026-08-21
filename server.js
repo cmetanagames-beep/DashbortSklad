@@ -980,7 +980,27 @@ async function fetchGoogleLogistics(force = false) {
   for (const item of summaries) {
     const key = monthKey(item.date); if (key) ensureMonth(key).logisticsCost += Number(item.logisticsCost || 0);
   }
-  for (const item of monthly.values()) item.logisticsPercent = item.totalSum > 0 ? item.logisticsCost / item.totalSum * 100 : 0;
+  const workdaysInMonth = (key, throughDay = 31) => {
+    const [year, month] = String(key).split('-').map(Number), last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    let count = 0;
+    for (let day = 1; day <= Math.min(last, throughDay); day += 1) { const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); if (weekday !== 0 && weekday !== 6) count += 1; }
+    return count;
+  };
+  const moscowParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone:'Europe/Moscow', year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date()).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  const currentMonthKey = `${moscowParts.year}-${moscowParts.month}`, currentDay = Number(moscowParts.day), previousDate = new Date(Date.UTC(Number(moscowParts.year), Number(moscowParts.month) - 2, 1)), previousMonthKey = `${previousDate.getUTCFullYear()}-${String(previousDate.getUTCMonth() + 1).padStart(2, '0')}`;
+  for (const item of monthly.values()) {
+    item.logisticsPercent = item.totalSum > 0 ? item.logisticsCost / item.totalSum * 100 : 0;
+    const completedWorkdays = item.month === currentMonthKey ? workdaysInMonth(item.month, currentDay) : workdaysInMonth(item.month);
+    item.averagePerWorkday = completedWorkdays > 0 ? item.totalSum / completedWorkdays : 0;
+  }
+  const currentMonth = monthly.get(currentMonthKey), previousMonth = monthly.get(previousMonthKey);
+  if (currentMonth) {
+    const elapsed = workdaysInMonth(currentMonthKey, currentDay), total = workdaysInMonth(currentMonthKey), previousTotalDays = workdaysInMonth(previousMonthKey);
+    currentMonth.elapsedWorkdays = elapsed; currentMonth.totalWorkdays = total;
+    currentMonth.forecastSum = elapsed > 0 ? currentMonth.totalSum / elapsed * total : currentMonth.totalSum;
+    currentMonth.paceReferenceSum = previousMonth && previousTotalDays > 0 ? previousMonth.totalSum / previousTotalDays * elapsed : 0;
+    currentMonth.paceDeltaPercent = currentMonth.paceReferenceSum > 0 ? (currentMonth.totalSum - currentMonth.paceReferenceSum) / currentMonth.paceReferenceSum * 100 : null;
+  }
   const monthlyStats = [...monthly.values()].sort((a,b) => b.month.localeCompare(a.month));
   const data = { ok: true, spreadsheetId: '18H4xoO7DFMsIml68G-Ama_fxjc3EW8-tbcKBCtAuuC4', sheetName:'Отгрузки',
     count: deliveries.length + selfPickups.length, deliveries, selfPickups, summaries: summaries.length, monthlyStats };
