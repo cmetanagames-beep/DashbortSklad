@@ -886,6 +886,17 @@ async function fetchGoogleLogistics(force = false) {
   const response = await fetch(GOOGLE_LOGISTICS_CSV, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) throw new Error(`Google Таблица вернула HTTP ${response.status}`);
   const rows = parseCsv(await response.text());
+  const header = rows.find(row => row.some(cell => /^Номер заказа$/i.test(String(cell || '').trim())) && row.some(cell => /Затраты на логистику/i.test(String(cell || '')))) || [];
+  const headerIndex = (pattern, start = 0, fallback = -1) => {
+    const index = header.findIndex((cell, position) => position >= start && pattern.test(String(cell || '').trim()));
+    return index >= 0 ? index : fallback;
+  };
+  const pickupClientIndex = headerIndex(/^Наименование$/i, 16, 17);
+  const pickupOrderIndex = headerIndex(/^Номер$/i, pickupClientIndex + 1, 18);
+  const pickupSumIndex = headerIndex(/^Сумма$/i, pickupOrderIndex + 1, 24);
+  const summaryDriverIndex = headerIndex(/^Водитель$/i, pickupSumIndex + 1, 26);
+  const summaryOrderSumIndex = headerIndex(/^Сумма заказов$/i, summaryDriverIndex + 1, 28);
+  const summaryLogisticsIndex = headerIndex(/Затраты на логистику/i, summaryOrderSumIndex + 1, 29);
   const deliveries = [];
   const selfPickups = [];
   const summaries = [];
@@ -907,18 +918,17 @@ async function fetchGoogleLogistics(force = false) {
         carrierCost: parseSheetMoney(cells[13]), orderSum: parseSheetMoney(cells[14]), logisticsCost: 0,
       });
     }
-    const pickupOrderNumber = String(cells[18] || '').trim();
-    const pickupClient = String(cells[17] || '').trim();
+    const pickupOrderNumber = String(cells[pickupOrderIndex] || '').trim();
+    const pickupClient = String(cells[pickupClientIndex] || '').trim();
     if (/^\d+$/.test(pickupOrderNumber) && date) {
       selfPickups.push({
         date, client: pickupClient, orderNumber: pickupOrderNumber,
-        requestNumber: String(cells[19] || '').trim(), status: String(cells[21] || '').trim(),
-        assembledWarehouse: String(cells[22] || '').trim(), shippedWarehouse: String(cells[23] || '').trim(),
-        orderSum: parseSheetMoney(cells[24]), deliveryType: 'Самовывоз',
+        requestNumber: String(cells[pickupOrderIndex + 1] || '').trim(),
+        orderSum: parseSheetMoney(cells[pickupSumIndex]), deliveryType: 'Самовывоз',
       });
     }
-    const summaryDriver = String(cells[26] || '').trim();
-    const logisticsCost = parseSheetMoney(cells[29]);
+    const summaryDriver = String(cells[summaryDriverIndex] || '').trim();
+    const logisticsCost = parseSheetMoney(cells[summaryLogisticsIndex]);
     if (date && summaryDriver && logisticsCost > 0) summaries.push({ date, driver: summaryDriver, logisticsCost });
   }
   for (const summary of summaries) {
